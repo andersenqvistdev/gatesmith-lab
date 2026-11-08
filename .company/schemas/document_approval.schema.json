@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "document_approval.schema.json",
+  "title": "Document Approval Frontmatter Schema",
+  "description": "Schema for YAML frontmatter in documents requiring approval (P23)",
+  "version": "1.0",
+  "type": "object",
+  "required": ["title", "type", "status", "approval_tier", "approval_required"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Document title",
+      "maxLength": 200
+    },
+    "type": {
+      "type": "string",
+      "description": "Document type classification",
+      "enum": ["goals", "roadmap", "policy", "decision", "budget", "architecture", "process", "strategy"]
+    },
+    "status": {
+      "type": "string",
+      "description": "Current approval status",
+      "enum": ["draft", "proposed", "under_review", "approved", "rejected", "superseded"]
+    },
+    "approval_tier": {
+      "type": "string",
+      "description": "Approval tier determining routing and quorum rules",
+      "enum": ["team_lead", "c_level", "board"]
+    },
+    "approval_required": {
+      "type": "array",
+      "description": "List of approver IDs required for sign-off",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "minItems": 1
+    },
+    "author": {
+      "type": "string",
+      "description": "Document author ID",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "proposed_at": {
+      "type": "string",
+      "description": "ISO 8601 date when document was proposed",
+      "format": "date"
+    },
+    "approved_at": {
+      "type": ["string", "null"],
+      "description": "ISO 8601 date when document was approved",
+      "format": "date"
+    },
+    "rejected_at": {
+      "type": ["string", "null"],
+      "description": "ISO 8601 date when document was rejected",
+      "format": "date"
+    },
+    "approved_by": {
+      "type": "array",
+      "description": "List of approver IDs who have approved",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "rejected_by": {
+      "type": "array",
+      "description": "List of approver IDs who have rejected",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "version": {
+      "type": "string",
+      "description": "Document version (semver or simple integer)",
+      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+      "default": "1"
+    },
+    "supersedes": {
+      "type": ["string", "null"],
+      "description": "Document ID this supersedes (for versioned documents)"
+    },
+    "deadline": {
+      "type": ["string", "null"],
+      "description": "Approval deadline (ISO 8601 date)",
+      "format": "date"
+    },
+    "tags": {
+      "type": "array",
+      "description": "Optional tags for categorization",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    }
+  },
+  "definitions": {
+    "approval_vote": {
+      "type": "object",
+      "description": "Individual approval vote record",
+      "required": ["approver_id", "decision", "recorded_at"],
+      "properties": {
+        "approver_id": {
+          "type": "string",
+          "description": "ID of the approver"
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["approve", "reject", "abstain"]
+        },
+        "comments": {
+          "type": "string",
+          "description": "Optional comments from approver"
+        },
+        "recorded_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approval_tier": { "const": "team_lead" }
+        }
+      },
+      "then": {
+        "properties": {
+          "approval_required": {
+            "maxItems": 1,
+            "description": "Team lead tier requires exactly one approver"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "approval_tier": { "const": "board" }
+        }
+      },
+      "then": {
+        "properties": {
+          "approval_required": {
+            "minItems": 2,
+            "description": "Board tier requires at least 2 approvers for quorum"
+          }
+        }
+      }
+    }
+  ]
+}

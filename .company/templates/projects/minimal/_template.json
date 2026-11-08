@@ -1,0 +1,7 @@
+{
+  "name": "minimal",
+  "version": "1.0",
+  "description": "Minimal project scaffold with just planning and claude directories",
+  "tech_stack": [],
+  "domains": ["general", "mvp", "prototype"]
+}
