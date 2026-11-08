@@ -1,0 +1,7 @@
+{
+  "name": "node-frontend",
+  "version": "1.0",
+  "description": "React frontend application with Vite and modern tooling",
+  "tech_stack": ["node", "javascript", "react", "vite", "vitest"],
+  "domains": ["frontend", "web", "ui"]
+}
