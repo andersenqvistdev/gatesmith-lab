@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""
+gatesmith-phantom-drill — Lab kit: watch the deliverable judge block a phantom.
+
+Creates a deliberate phantom diff (docs-only change or the vague "First task"
+pattern from the P15-G1 lineage), builds the adversarial judge prompt, and
+shows the verdict-rejection and quarantine-label flow end-to-end in a sandbox.
+
+Safe by design:
+  * Never touches the production work queue or .company/ state directory.
+  * All sandbox artifacts land in a temporary directory cleaned on exit
+    (unless --keep-sandbox is set).
+  * Offline mode (pre-recorded verdict) is used automatically when the claude
+    binary is not on PATH — deterministic for CI and student machines.
+
+Usage:
+  bin/gatesmith-phantom-drill [--scenario SCENARIO] [--offline] [--keep-sandbox]
+                          [--verbose] [--help]
+
+Scenarios (--scenario):
+  docs-only     Docs-only change claiming a feature implementation (default)
+  vague-title   Vague "First task" pattern from the P15-G1 incident lineage
+
+Options:
+  --offline        Force offline mode (pre-recorded verdict, skips claude)
+  --keep-sandbox   Do not delete the sandbox temp dir on exit
+  --verbose        Show the full diff and judge prompt size
+  --help, -h       Show this message and exit
+
+Exit codes:
+  0  Drill completed (verdict is data — a blocked phantom is the expected result)
+  1  Usage error
+"""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+from pathlib import Path
+
+# Resolve the backend module from the project root regardless of cwd.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_HOOKS_COMPANY = _PROJECT_ROOT / ".claude" / "hooks" / "company"
+sys.path.insert(0, str(_HOOKS_COMPANY))
+
+import phantom_drill as _pd  # noqa: E402
+
+
+def _parse_args(argv: list[str]) -> dict:
+    args: dict = {
+        "scenario": "docs-only",
+        "offline": None,
+        "keep_sandbox": False,
+        "verbose": False,
+        "help": False,
+    }
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("-h", "--help"):
+            args["help"] = True
+        elif tok == "--offline":
+            args["offline"] = True
+        elif tok == "--keep-sandbox":
+            args["keep_sandbox"] = True
+        elif tok == "--verbose":
+            args["verbose"] = True
+        elif tok == "--scenario":
+            if i + 1 >= len(argv):
+                print("error: --scenario requires an argument", file=sys.stderr)
+                sys.exit(1)
+            i += 1
+            args["scenario"] = argv[i]
+        elif tok.startswith("--scenario="):
+            args["scenario"] = tok.split("=", 1)[1]
+        else:
+            print(f"error: unknown argument {tok!r}", file=sys.stderr)
+            sys.exit(1)
+        i += 1
+    return args
+
+
+def main() -> int:
+    args = _parse_args(sys.argv[1:])
+
+    if args["help"]:
+        print(__doc__)
+        return 0
+
+    scenario = args["scenario"]
+    if scenario not in _pd.SCENARIOS:
+        print(
+            f"error: unknown scenario {scenario!r}. "
+            f"Available: {sorted(_pd.SCENARIOS)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Allocate temp dir now so we can clean it up on exit.
+    tmp_dir = tempfile.mkdtemp(prefix="gatesmith-phantom-drill-")
+    sandbox_dir = Path(tmp_dir)
+
+    try:
+        result = _pd.run_drill(
+            scenario,
+            offline=args["offline"],
+            sandbox_dir=sandbox_dir,
+        )
+        print(_pd.format_output(result, verbose=args["verbose"]))
+        return 0
+    finally:
+        if not args["keep_sandbox"]:
+            import shutil
+
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
