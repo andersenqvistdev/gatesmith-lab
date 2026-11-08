@@ -113,6 +113,10 @@ def render_audit(entries: list[dict], query: str) -> str:
 
     if not entries:
         lines.append(f"  {DIM}No audit records found for {query!r}.{RESET}")
+        lines.append(
+            f"  {DIM}A record is written when the daemon merges a PR. "
+            f"A PR you merged yourself has none.{RESET}"
+        )
         lines.append("")
         lines.append(DIM + "─" * w + RESET)
         return "\n".join(lines)

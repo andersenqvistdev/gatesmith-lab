@@ -2314,7 +2314,7 @@ def create_task(
     return {
         "task_id": generate_task_id(),
         "title": title,
-        "description": description,
+        "description": description or title,
         "priority": safe_priority,
         "department": department,
         "project_id": project_id,

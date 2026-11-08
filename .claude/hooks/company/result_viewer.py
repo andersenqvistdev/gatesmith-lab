@@ -133,6 +133,10 @@ def render_summary(results: list[dict], limit: int = 10) -> str:
 
     if not results:
         lines.append("  \033[2m(no results found)\033[0m")
+        lines.append(
+            "  \033[2mThe daemon writes these. Work from /run-loop shows in "
+            "./bin/gatesmith-queue, under RECENT COMPLETIONS, after heal.\033[0m"
+        )
         lines.append("")
         lines.append("\033[1m" + "═" * w + "\033[0m")
         return "\n".join(lines)
