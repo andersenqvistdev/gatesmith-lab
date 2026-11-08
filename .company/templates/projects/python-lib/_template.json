@@ -1,0 +1,7 @@
+{
+  "name": "python-lib",
+  "version": "1.0",
+  "description": "Python library project with pytest and modern pyproject.toml configuration",
+  "tech_stack": ["python", "pytest", "uv"],
+  "domains": ["library", "backend", "sdk"]
+}

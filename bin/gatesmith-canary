@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# gatesmith-canary — One-command auto-merge gate drill
+#
+# Verifies preconditions, runs closed/open-gate smoke tests, and prints
+# the 4 artifacts that prove the auto-merge pipeline is correctly wired.
+# Run before flipping allowMergeToMain (or after any config change).
+#
+# Usage:
+#   gatesmith-canary [--project-dir PATH] [--mode MODE] [--dry-run] [--json]
+#
+# Modes:
+#   full            Run all stages (default)
+#   preconditions   Only precondition checks — no PRs created (fast)
+#   closed-gate     Only closed-gate judge drill
+#   open-gate       Only open-gate PR drill
+#
+# Exit codes:
+#   0  All stages PASS (or WARN/SKIP)
+#   1  One or more stages FAIL
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND="${SCRIPT_DIR}/.claude/hooks/company/forge_canary.py"
+
+if [ ! -f "$BACKEND" ]; then
+    echo "Error: forge_canary.py not found at ${BACKEND}" >&2
+    exit 1
+fi
+
+case "${1:-}" in
+    --help|-h|help)
+        head -20 "$0" | tail -17
+        exit 0
+        ;;
+    *)
+        exec uv run "$BACKEND" "$@"
+        ;;
+esac
