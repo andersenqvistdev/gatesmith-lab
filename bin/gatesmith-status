@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# gatesmith-status — Gatesmith Labs daemon operational snapshot
+#
+# Usage:
+#   gatesmith-status          # Concise read-only status snapshot
+#   gatesmith-status --json   # Machine-readable JSON output
+#   gatesmith-status --help   # Show this help
+#
+# Exit codes:
+#   0 — daemon running, circuit breaker CLOSED
+#   1 — daemon not running or circuit breaker OPEN/HALF_OPEN
+#   2 — usage error
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MONITOR="${SCRIPT_DIR}/.claude/hooks/company/status_monitor.py"
+
+if [ ! -f "$MONITOR" ]; then
+    echo "Error: status_monitor.py not found at ${MONITOR}" >&2
+    exit 1
+fi
+
+case "${1:-}" in
+    help|--help|-h)
+        head -11 "$0" | tail -8
+        ;;
+    version|--version|-v)
+        CONFIG="${SCRIPT_DIR}/gatesmith.json"
+        if [ -f "$CONFIG" ]; then
+            ver="$(python3 -c "import json,sys; d=json.load(open('$CONFIG')); print(d.get('version',''))" 2>/dev/null)"
+        fi
+        if [ -n "${ver:-}" ]; then
+            echo "Gatesmith ${ver}"
+        else
+            echo "Gatesmith (unknown version)"
+        fi
+        ;;
+    *)
+        exec uv run "$MONITOR" "$@"
+        ;;
+esac
