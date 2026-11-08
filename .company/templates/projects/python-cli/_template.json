@@ -1,0 +1,7 @@
+{
+  "name": "python-cli",
+  "version": "1.0",
+  "description": "Python CLI application with Click/Typer and modern pyproject.toml configuration",
+  "tech_stack": ["python", "pytest", "click", "uv"],
+  "domains": ["cli", "tool", "automation"]
+}

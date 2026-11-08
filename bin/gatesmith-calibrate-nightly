@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""
+gatesmith-calibrate-nightly — Automated nightly calibration.
+
+Runs Tier-1 (gh merged-check) on all completed-with-PR tasks in the
+configured window, then Tier-2 semantic judgment only on survivors that have
+not been judged in a previous nightly run.  Appends a new snapshot to
+.company/state/autonomy_audit.json and records semantic phantoms in
+.company/knowledge/anti_patterns.json.
+
+Run from the project root (or pass --company-dir / --project-root).
+Typically invoked by the dev.gatesmith.calibrate LaunchAgent at 2 AM UTC.
+
+Usage:
+  bin/gatesmith-calibrate-nightly [--dry-run] [--window N] [--company-dir DIR]
+                              [--project-root DIR] [--verbose]
+
+Options:
+  --dry-run          Print what would happen; do not write any state
+  --window N         Look-back window in days (default: 30)
+  --company-dir DIR  Override .company/ directory location
+  --project-root DIR Project root for antipattern recording
+  --verbose          Print progress to stderr
+  -h, --help         Show this message and exit
+
+Exit codes:
+  0  Success (including empty night with no new PRs)
+  1  Fatal error (company dir not found, gh auth failure, etc.)
+  2  Usage error
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_HOOKS_COMPANY = _PROJECT_ROOT / ".claude" / "hooks" / "company"
+sys.path.insert(0, str(_HOOKS_COMPANY))
+
+import nightly_calibration as nc  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(nc.main())

@@ -1,0 +1,7 @@
+{
+  "name": "node-api",
+  "version": "1.0",
+  "description": "Node.js REST API with Express and modern ES module configuration",
+  "tech_stack": ["node", "javascript", "express", "jest"],
+  "domains": ["api", "backend", "rest"]
+}
