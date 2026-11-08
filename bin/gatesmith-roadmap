@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# gatesmith-roadmap — Gatesmith Labs roadmap CLI
+#
+# Usage:
+#   gatesmith-roadmap validate     # Parse .planning/ROADMAP.md task tags; report problems
+#   gatesmith-roadmap status       # Show waves and their task states
+#   gatesmith-roadmap run          # Invoke the scheduler once
+#   gatesmith-roadmap help         # Show this help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCHEDULER="${SCRIPT_DIR}/.claude/hooks/company/roadmap_scheduler.py"
+
+if [ ! -f "$SCHEDULER" ]; then
+    echo "Error: roadmap_scheduler.py not found at ${SCHEDULER}" >&2
+    exit 1
+fi
+
+case "${1:-}" in
+    validate|v)
+        exec uv run "$SCHEDULER" validate
+        ;;
+    status|s)
+        exec uv run "$SCHEDULER" status
+        ;;
+    run|r)
+        exec uv run "$SCHEDULER" scan
+        ;;
+    help|--help|-h)
+        head -8 "$0" | tail -5
+        ;;
+    "")
+        head -8 "$0" | tail -5
+        ;;
+    *)
+        echo "Error: unknown subcommand '${1}'" >&2
+        echo "Run 'gatesmith-roadmap help' for usage." >&2
+        exit 1
+        ;;
+esac
