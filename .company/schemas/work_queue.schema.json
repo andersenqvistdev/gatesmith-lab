@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "work_queue.schema.json",
+  "title": "Work Queue Schema",
+  "description": "Queue for autonomous operation loop tasks. v1.1 adds cross-project routing support. Migration note: All new fields are optional for backward compatibility with v1.0 queues.",
+  "type": "object",
+  "required": ["version", "items"],
+  "definitions": {
+    "routing_event": {
+      "type": "object",
+      "description": "Records a cross-project routing event for audit trail",
+      "properties": {
+        "from_project": {
+          "type": "string",
+          "description": "Project ID the task was routed from"
+        },
+        "to_project": {
+          "type": "string",
+          "description": "Project ID the task was routed to"
+        },
+        "routed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when routing occurred"
+        },
+        "routed_by": {
+          "type": "string",
+          "description": "Employee ID or system that performed the routing"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Explanation for why the task was routed"
+        }
+      },
+      "required": ["from_project", "to_project", "routed_at", "routed_by"]
+    }
+  },
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": ["1.0", "1.1"],
+      "description": "Schema version. 1.1 adds cross-project routing fields."
+    },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "status", "created_at"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^WQ-[0-9]+$",
+            "description": "Unique work queue item ID"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["task", "review", "input", "escalation"],
+            "description": "Type of work item"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "blocked", "completed", "failed"],
+            "description": "Current status of the item"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 3,
+            "description": "Priority level (1=highest, 5=lowest)"
+          },
+          "assignee": {
+            "type": ["string", "null"],
+            "description": "Employee ID assigned to this item"
+          },
+          "title": {
+            "type": "string",
+            "description": "Brief title of the work item"
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of what needs to be done"
+          },
+          "payload": {
+            "type": "object",
+            "description": "Additional data specific to the work item type"
+          },
+          "created_at": { "type": "string", "format": "date-time" },
+          "started_at": { "type": ["string", "null"], "format": "date-time" },
+          "completed_at": { "type": ["string", "null"], "format": "date-time" },
+          "retry_count": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Number of retry attempts"
+          },
+          "max_retries": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 3,
+            "description": "Maximum retry attempts before failing"
+          },
+          "source": {
+            "type": "string",
+            "enum": ["human", "self_initiated", "scheduled", "escalation"],
+            "description": "How this work item was created"
+          },
+          "source_project_id": {
+            "type": ["string", "null"],
+            "description": "Original project where this task was created (v1.1)"
+          },
+          "target_project_id": {
+            "type": ["string", "null"],
+            "description": "Project this task has been routed to (v1.1)"
+          },
+          "routing_reason": {
+            "type": ["string", "null"],
+            "description": "Explanation for why the task was routed to another project (v1.1)"
+          },
+          "routing_history": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/routing_event" },
+            "description": "Full audit trail of cross-project routing events (v1.1)"
+          },
+          "cross_project": {
+            "type": "boolean",
+            "default": false,
+            "description": "Flag indicating this is a cross-project task (v1.1)"
+          },
+          "allowed_projects": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of project IDs that can access this task for access control (v1.1)"
+          }
+        }
+      }
+    }
+  }
+}

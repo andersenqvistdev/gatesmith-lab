@@ -1,0 +1,362 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "unified_state.schema.json",
+  "title": "Unified State Schema",
+  "description": "Unified state schema combining GSD session state (.planning/STATE.md) and daemon metrics (.company/session_state.json). Version 1.0 provides backward compatibility with migration support for existing state files.",
+  "type": "object",
+  "required": ["schema_version", "updated_at"],
+  "definitions": {
+    "iso_datetime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 datetime string with timezone"
+    },
+    "iso_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "ISO 8601 date string (YYYY-MM-DD)"
+    },
+    "task_error": {
+      "type": "object",
+      "description": "Error record from task execution",
+      "properties": {
+        "time": { "$ref": "#/definitions/iso_datetime" },
+        "task_id": { "type": "string" },
+        "error": { "type": "string", "description": "Error message" }
+      },
+      "required": ["time", "task_id", "error"]
+    },
+    "fix_hints": {
+      "type": "object",
+      "description": "Self-healing fix hints for a failed task",
+      "properties": {
+        "hint": { "type": "string", "description": "Human-readable hint for the fix" },
+        "suggested_action": { "type": "string", "description": "Suggested action to resolve the issue" },
+        "error_type": { "type": "string", "description": "Category of error" },
+        "error_snippet": { "type": "string", "description": "Truncated error message (max 200 chars)" },
+        "generated_at": { "$ref": "#/definitions/iso_datetime" }
+      }
+    },
+    "phase_progress": {
+      "type": "object",
+      "description": "Progress tracking for a single phase",
+      "properties": {
+        "phase_id": { "type": "string", "description": "Phase identifier (e.g., 'P28', 'P28.2')" },
+        "name": { "type": "string", "description": "Human-readable phase name" },
+        "tasks_total": { "type": "integer", "minimum": 0 },
+        "tasks_done": { "type": "integer", "minimum": 0 },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "planning", "in_progress", "blocked", "complete"],
+          "description": "Current status of the phase"
+        }
+      },
+      "required": ["phase_id", "tasks_total", "tasks_done", "status"]
+    },
+    "recent_change": {
+      "type": "object",
+      "description": "Record of a recent file change",
+      "properties": {
+        "file": { "type": "string", "description": "File path that was changed" },
+        "change": { "type": "string", "description": "Description of the change" },
+        "task_id": { "type": "string", "description": "Task that produced this change" }
+      },
+      "required": ["file", "change"]
+    },
+    "key_decision": {
+      "type": "object",
+      "description": "Record of a key decision",
+      "properties": {
+        "decision": { "type": "string", "description": "What was decided" },
+        "choice": { "type": "string", "description": "The chosen option" },
+        "context": { "type": "string", "description": "Optional context (e.g., 'Research Spike', 'v1.5')" }
+      },
+      "required": ["decision", "choice"]
+    },
+    "company_phase": {
+      "type": "string",
+      "enum": ["startup", "growth", "scale", "mature", "decline_pivot"],
+      "description": "Company lifecycle phase"
+    },
+    "metrics_snapshot": {
+      "type": "object",
+      "description": "Point-in-time metrics snapshot for company phase tracking",
+      "properties": {
+        "employees": { "type": "integer", "minimum": 0 },
+        "velocity": { "type": "number", "minimum": 0 },
+        "blocked_ratio": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version for migration compatibility"
+    },
+    "updated_at": {
+      "$ref": "#/definitions/iso_datetime",
+      "description": "Last update timestamp"
+    },
+    "migrated_from": {
+      "type": "object",
+      "description": "Migration metadata (present only if state was migrated from legacy format)",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["gsd", "daemon", "merged"],
+          "description": "Source of the migrated state"
+        },
+        "migrated_at": { "$ref": "#/definitions/iso_datetime" },
+        "original_files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Original file paths that were merged"
+        }
+      }
+    },
+
+    "session": {
+      "type": "object",
+      "description": "Session information (from GSD STATE.md Last Session)",
+      "properties": {
+        "date": {
+          "$ref": "#/definitions/iso_date",
+          "description": "Session date"
+        },
+        "phase": {
+          "type": "string",
+          "description": "Current phase being worked (e.g., 'P28.2')"
+        },
+        "last_completed_task": {
+          "type": "string",
+          "description": "Last completed task identifier and name"
+        },
+        "next_task": {
+          "type": "string",
+          "description": "Next task to work on"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Git branch name"
+        },
+        "status": {
+          "type": "string",
+          "description": "Session status description"
+        }
+      }
+    },
+
+    "context_snapshot": {
+      "type": "string",
+      "description": "Free-form context the next session needs to know (from GSD STATE.md)"
+    },
+
+    "company_phase_info": {
+      "type": "object",
+      "description": "Company lifecycle phase tracking (from GSD STATE.md Company Phase section)",
+      "properties": {
+        "current_phase": { "$ref": "#/definitions/company_phase" },
+        "since": {
+          "$ref": "#/definitions/iso_datetime",
+          "description": "When the current phase started"
+        },
+        "metrics_snapshot": { "$ref": "#/definitions/metrics_snapshot" },
+        "last_assessment": {
+          "$ref": "#/definitions/iso_datetime",
+          "description": "Last time phase was assessed"
+        },
+        "transition_pending": {
+          "$ref": "#/definitions/company_phase",
+          "description": "Pending transition to another phase (awaiting confirmation)"
+        }
+      }
+    },
+
+    "progress": {
+      "type": "object",
+      "description": "Phase progress tracking (from GSD STATE.md Progress section)",
+      "properties": {
+        "current": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/phase_progress" },
+          "description": "Current roadmap phases"
+        },
+        "previous": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/phase_progress" },
+          "description": "Previous version phases (for historical context)"
+        }
+      }
+    },
+
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Current blockers preventing progress (from GSD STATE.md)"
+    },
+
+    "key_decisions": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/key_decision" },
+      "description": "Key decisions made (from GSD STATE.md Key Decisions section)"
+    },
+
+    "recent_changes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/recent_change" },
+      "description": "Recent file changes (from GSD STATE.md Recent Changes section)",
+      "maxItems": 20
+    },
+
+    "daemon": {
+      "type": "object",
+      "description": "Daemon-specific state (from .company/session_state.json)",
+      "properties": {
+        "start_time": {
+          "$ref": "#/definitions/iso_datetime",
+          "description": "When the daemon session started"
+        },
+        "start_health": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Health score at session start"
+        },
+
+        "loop_metrics": {
+          "type": "object",
+          "description": "Operation loop metrics",
+          "properties": {
+            "tasks_claimed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total tasks claimed by the loop"
+            },
+            "tasks_completed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total tasks successfully completed"
+            },
+            "tasks_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total tasks that failed (may retry)"
+            },
+            "tasks_escalated": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total tasks escalated for human review"
+            },
+            "last_poll_time": {
+              "$ref": "#/definitions/iso_datetime",
+              "description": "Timestamp of last poll operation"
+            },
+            "last_task_id": {
+              "type": ["string", "null"],
+              "description": "ID of most recently processed task"
+            },
+            "current_task_id": {
+              "type": ["string", "null"],
+              "description": "ID of task currently being processed (null if idle)"
+            },
+            "consecutive_idle_polls": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Count of consecutive polls with no work"
+            },
+            "errors": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/task_error" },
+              "maxItems": 10,
+              "description": "Recent errors (FIFO, max 10)"
+            }
+          }
+        },
+
+        "economics_metrics": {
+          "type": "object",
+          "description": "Effort metrics for capacity planning (NOT cost - per REQUIREMENTS.md Out of Scope)",
+          "properties": {
+            "total_tasks_attempted": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total tasks attempted (including retries)"
+            },
+            "total_tasks_completed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total tasks successfully completed"
+            },
+            "total_retry_attempts": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total retry attempts across all tasks"
+            },
+            "total_execution_time_seconds": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Cumulative execution time in seconds"
+            },
+            "average_task_duration_seconds": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Average task duration (total_time / completed)"
+            },
+            "estimated_duration_per_task": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Rolling average using formula: (old * 0.7) + (new * 0.3)"
+            },
+            "longest_task_id": {
+              "type": "string",
+              "description": "ID of task with longest execution time"
+            },
+            "longest_task_duration_seconds": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Duration of longest task in seconds"
+            }
+          }
+        },
+
+        "task_metadata": {
+          "type": "object",
+          "description": "Per-task metadata keyed by task ID",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "fix_hints": { "$ref": "#/definitions/fix_hints" },
+              "claimed_at": { "$ref": "#/definitions/iso_datetime" },
+              "completed_at": { "$ref": "#/definitions/iso_datetime" },
+              "retry_count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+
+    "orchestrator": {
+      "type": "object",
+      "description": "Orchestrator routing state (reference to .company/orchestrator_metrics.json)",
+      "properties": {
+        "metrics_file": {
+          "type": "string",
+          "const": "orchestrator_metrics.json",
+          "description": "Separate file for orchestrator metrics (not inlined to avoid duplication)"
+        },
+        "last_routing": {
+          "type": "object",
+          "description": "Last routing decision summary (cached for quick access)",
+          "properties": {
+            "task_id": { "type": "string" },
+            "complexity": { "type": "string", "enum": ["trivial", "standard", "complex", "epic"] },
+            "execution_mode": { "type": "string", "enum": ["direct", "plan_execute", "full_pipeline"] },
+            "routed_at": { "$ref": "#/definitions/iso_datetime" }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

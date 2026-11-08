@@ -1,0 +1,1051 @@
+#!/usr/bin/env bash
+# Gatesmith Framework Installation Script — CI/CD-oriented, mode-based.
+# Sets up an autonomous AI development company.
+#
+# This is the scriptable installer used by CI and the `gatesmith-install` GitHub
+# composite action (.github/actions/gatesmith-install/). For interactive human
+# installs, use the full-featured ./install.sh at the repo root instead.
+# Both copy the same canonical .claude/gatesmith.json (single source of truth).
+#
+# Usage:
+#   ./bin/gatesmith-install                     # Install in current directory
+#   ./bin/gatesmith-install --mode existing     # Add Gatesmith to existing project
+#   ./bin/gatesmith-install --mode new          # Start new project from Gatesmith
+#   ./bin/gatesmith-install --mode hooks-only   # Just copy hooks (minimal)
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Icons
+CHECK="${GREEN}[OK]${NC}"
+FAIL="${RED}[FAIL]${NC}"
+WARN="${YELLOW}[WARN]${NC}"
+INFO="${BLUE}[INFO]${NC}"
+
+# Defaults
+INSTALL_MODE=""
+GITHUB_REPO=""
+FORGE_SOURCE="https://github.com/gatesmithdev/gatesmith.git"
+TARGET_DIR="."
+TARGET_DIR_EXPLICIT="false"
+
+print_header() {
+    echo ""
+    echo "========================================"
+    echo "  FORGE FRAMEWORK INSTALLATION"
+    echo "  Autonomous AI Development Company"
+    echo "========================================"
+    echo ""
+}
+
+print_usage() {
+    echo "Usage: gatesmith-install [OPTIONS]"
+    echo ""
+    echo "Installation Modes:"
+    echo "  --mode new          Create new project from Gatesmith template"
+    echo "  --mode existing     Add Gatesmith to existing project (default)"
+    echo "  --mode hooks-only   Minimal install - just hooks and config"
+    echo "  --mode verify       Check installation and configuration"
+    echo ""
+    echo "Options:"
+    echo "  --github-repo URL   Your GitHub repository URL"
+    echo "  --target DIR        Target directory (default: current)"
+    echo "  --source URL        Gatesmith source repo (for forks)"
+    echo "  --help, -h          Show this help message"
+    echo ""
+    echo "Examples:"
+    echo ""
+    echo "  # Add Gatesmith to existing project"
+    echo "  cd my-existing-project"
+    echo "  curl -sSL https://raw.githubusercontent.com/gatesmithdev/gatesmith/main/bin/gatesmith-install | bash"
+    echo ""
+    echo "  # Start new project"
+    echo "  gatesmith-install --mode new --target my-company --github-repo https://github.com/org/repo.git"
+    echo ""
+    echo "  # Just add hooks to existing project"
+    echo "  gatesmith-install --mode hooks-only"
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --mode)
+            INSTALL_MODE="$2"
+            shift 2
+            ;;
+        --github-repo)
+            GITHUB_REPO="$2"
+            shift 2
+            ;;
+        --target)
+            TARGET_DIR="$2"
+            TARGET_DIR_EXPLICIT="true"
+            shift 2
+            ;;
+        --source)
+            FORGE_SOURCE="$2"
+            shift 2
+            ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            print_usage
+            exit 1
+            ;;
+    esac
+done
+
+# Honour --target for the modes that operate on an existing directory. The
+# per-mode steps below use cwd-relative paths, so change into the target before
+# anything is detected or written. "new" clones into the target itself.
+FORGE_SRC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+if [ "$TARGET_DIR_EXPLICIT" = "true" ] && [ "$INSTALL_MODE" != "new" ] \
+    && { [ -n "$INSTALL_MODE" ] || [ -d "$TARGET_DIR" ]; }; then
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Error: target directory '$TARGET_DIR' does not exist" >&2
+        exit 1
+    fi
+    if [ ! -e "$TARGET_DIR/.git" ]; then
+        echo "Error: target '$TARGET_DIR' is not a git repository" >&2
+        exit 1
+    fi
+    RESOLVED_TARGET="$(cd "$TARGET_DIR" && pwd -P)"
+    if [ "$INSTALL_MODE" != "verify" ] && [ "$RESOLVED_TARGET" = "$FORGE_SRC_ROOT" ]; then
+        echo "Error: target '$RESOLVED_TARGET' is the Gatesmith source checkout; refusing to overwrite it" >&2
+        exit 1
+    fi
+    cd "$RESOLVED_TARGET"
+    TARGET_DIR="$RESOLVED_TARGET"
+fi
+
+# Detect mode if not specified
+if [ -z "$INSTALL_MODE" ]; then
+    if [ -f ".claude/hooks/company/forge_daemon.py" ]; then
+        echo -e "${INFO} Gatesmith already installed. Running configuration check..."
+        INSTALL_MODE="verify"
+    elif [ -d ".git" ]; then
+        INSTALL_MODE="existing"
+    else
+        INSTALL_MODE="new"
+    fi
+fi
+
+# Validate mode is one of the known values
+case "$INSTALL_MODE" in
+    new|existing|hooks-only|verify) ;;
+    *)
+        echo "Error: invalid mode '$INSTALL_MODE'. Valid modes: new, existing, hooks-only, verify" >&2
+        exit 1
+        ;;
+esac
+
+print_header
+
+echo -e "  ${CYAN}Mode:${NC} $INSTALL_MODE"
+echo -e "  ${CYAN}Target:${NC} $TARGET_DIR"
+[ -n "$GITHUB_REPO" ] && echo -e "  ${CYAN}GitHub:${NC} $GITHUB_REPO"
+echo ""
+
+# Track errors
+ERRORS=0
+
+section() {
+    echo ""
+    echo "----------------------------------------"
+    echo "  $1"
+    echo "----------------------------------------"
+}
+
+check() {
+    local name="$1"
+    local cmd="$2"
+    local required="${3:-true}"
+
+    if eval "$cmd" > /dev/null 2>&1; then
+        echo -e "  $CHECK $name"
+        return 0
+    else
+        if [ "$required" = "true" ]; then
+            echo -e "  $FAIL $name"
+            ((ERRORS++))
+            return 1
+        else
+            echo -e "  $WARN $name (optional)"
+            return 0
+        fi
+    fi
+}
+
+# =============================================================================
+# PREREQUISITES CHECK
+# =============================================================================
+
+section "Checking Prerequisites"
+
+# Python
+check "Python 3.10+" "python3 --version 2>&1 | grep -E 'Python 3\.(1[0-9]|[2-9][0-9])'"
+
+# uv
+if ! command -v uv > /dev/null 2>&1; then
+    echo -e "  $INFO Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+check "uv (Python package manager)" "command -v uv"
+
+# Git
+check "Git 2.30+" "git --version"
+
+# GitHub CLI
+check "GitHub CLI (gh)" "command -v gh"
+if ! command -v gh > /dev/null 2>&1; then
+    echo -e "  $INFO To install: brew install gh (macOS) or see https://cli.github.com/"
+fi
+
+# GitHub CLI auth
+check "GitHub CLI authenticated" "gh auth status" false
+
+# =============================================================================
+# MODE: NEW PROJECT
+# =============================================================================
+
+if [ "$INSTALL_MODE" = "new" ]; then
+    section "Creating New Project"
+
+    if [ "$TARGET_DIR" != "." ]; then
+        if [ -d "$TARGET_DIR" ]; then
+            echo -e "  $FAIL Directory $TARGET_DIR already exists"
+            exit 1
+        fi
+        echo -e "  $INFO Cloning Gatesmith to $TARGET_DIR..."
+        git clone "$FORGE_SOURCE" "$TARGET_DIR"
+        cd "$TARGET_DIR"
+    else
+        echo -e "  $INFO Cloning Gatesmith to current directory..."
+        git clone "$FORGE_SOURCE" .
+    fi
+    echo -e "  $CHECK Project created"
+
+    # Remove upstream remote, add as 'forge' for updates
+    git remote rename origin forge 2>/dev/null || true
+    if [ -n "$GITHUB_REPO" ]; then
+        git remote add origin "$GITHUB_REPO"
+        echo -e "  $CHECK Remote origin set to $GITHUB_REPO"
+    fi
+
+    # Safe defaults for a brand-new install. The cloned root gatesmith.json
+    # carries this repo's LIVE operational settings (incl. autoMerge.enabled and
+    # allowMergeToMain true). A new user must not auto-merge to main unreviewed —
+    # turn the daemon's merge loop off and neutralize the merge knobs (engine and
+    # everything else stay as shipped). The daemon reads all three keys.
+    if [ -f "gatesmith.json" ]; then
+        python3 - "gatesmith.json" <<'PY' 2>/dev/null && echo -e "  $CHECK Safe merge defaults applied (autoMerge.enabled=false, allowMergeToMain=false, requireApproval=true)" || echo -e "  $WARN Could not apply safe merge defaults to gatesmith.json - check autonomy.autoMerge before starting the daemon"
+import json, sys
+p = sys.argv[1]
+c = json.load(open(p))
+autonomy = c.setdefault("autonomy", {})
+am = autonomy.get("autoMerge")
+if not isinstance(am, dict):
+    am = autonomy["autoMerge"] = {}
+am["enabled"] = False
+am["allowMergeToMain"] = False
+am["requireApproval"] = True
+json.dump(c, open(p, "w"), indent=2)
+PY
+    fi
+fi
+
+# =============================================================================
+# MODE: EXISTING PROJECT
+# =============================================================================
+
+if [ "$INSTALL_MODE" = "existing" ]; then
+    section "Adding Gatesmith to Existing Project"
+
+    # Check if .claude already exists
+    if [ -d ".claude/hooks/company" ]; then
+        echo -e "  $WARN .claude/hooks/company already exists"
+        echo -e "  $INFO Use --mode verify to check configuration"
+    else
+        echo -e "  $INFO Downloading Gatesmith components..."
+
+        # Create temp dir for clone
+        TEMP_DIR=$(mktemp -d)
+        git clone --depth 1 "$FORGE_SOURCE" "$TEMP_DIR" 2>/dev/null
+
+        # Copy required directories
+        echo -e "  $INFO Copying .claude/hooks..."
+        mkdir -p .claude
+        cp -r "$TEMP_DIR/.claude/hooks" .claude/
+        cp -r "$TEMP_DIR/.claude/settings.json" .claude/ 2>/dev/null || true
+        cp -r "$TEMP_DIR/.claude/settings.local.json" .claude/ 2>/dev/null || true
+
+        echo -e "  $INFO Copying bin scripts..."
+        mkdir -p bin
+        cp "$TEMP_DIR/bin/forge-"* bin/ 2>/dev/null || true
+        chmod +x bin/forge-* 2>/dev/null || true
+
+        echo -e "  $INFO Copying configuration templates..."
+        # Ship the canonical fresh-install config (.claude/gatesmith.json):
+        # engine on, autoMerge omitted so allowMergeToMain defaults false. The root
+        # gatesmith.json carries this repo's live operational settings
+        # (incl. allowMergeToMain:true) and must NOT be shipped to new installs.
+        [ ! -f "gatesmith.json" ] && cp "$TEMP_DIR/.claude/gatesmith.json" gatesmith.json 2>/dev/null || true
+        [ ! -f "pyproject.toml" ] && cp "$TEMP_DIR/pyproject.toml" . 2>/dev/null || true
+
+        # Copy docs
+        mkdir -p docs
+        cp "$TEMP_DIR/docs/AUTONOMOUS-SETUP.md" docs/ 2>/dev/null || true
+        cp "$TEMP_DIR/docs/QUICKSTART.md" docs/ 2>/dev/null || true
+
+        # Cleanup
+        rm -rf "$TEMP_DIR"
+
+        echo -e "  $CHECK Gatesmith components installed"
+    fi
+fi
+
+# =============================================================================
+# MODE: HOOKS ONLY
+# =============================================================================
+
+if [ "$INSTALL_MODE" = "hooks-only" ]; then
+    section "Installing Hooks Only (Minimal)"
+
+    echo -e "  $INFO Downloading hooks..."
+
+    TEMP_DIR=$(mktemp -d)
+    git clone --depth 1 "$FORGE_SOURCE" "$TEMP_DIR" 2>/dev/null
+
+    mkdir -p .claude/hooks/company
+    cp -r "$TEMP_DIR/.claude/hooks/"*.py .claude/hooks/
+    cp -r "$TEMP_DIR/.claude/hooks/company/"*.py .claude/hooks/company/
+    # Prompt templates (challenger stage) are not .py files.
+    cp -r "$TEMP_DIR/.claude/hooks/company/templates" .claude/hooks/company/ 2>/dev/null || true
+    # `forge_daemon.py install` (macOS LaunchAgent) reads the plist templates
+    # and the CI-health prestart wrapper; neither is a .py file.
+    cp -r "$TEMP_DIR/.claude/hooks/company/launchd" .claude/hooks/company/
+    cp "$TEMP_DIR/.claude/hooks/company/daemon_prestart_wrapper.sh" .claude/hooks/company/
+    cp "$TEMP_DIR/.claude/settings.json" .claude/ 2>/dev/null || true
+
+    rm -rf "$TEMP_DIR"
+
+    echo -e "  $CHECK Hooks installed"
+
+    # Ensure .gitignore excludes Python bytecode and coverage artifacts so worker PRs stay clean
+    _gi_py=""
+    if [ -f ".gitignore" ]; then
+        grep -qF "__pycache__/" .gitignore 2>/dev/null || _gi_py="${_gi_py}__pycache__/\n"
+        grep -q   "\.pyc"       .gitignore 2>/dev/null || _gi_py="${_gi_py}*.pyc\n"
+        grep -q   "\.pyo"       .gitignore 2>/dev/null || _gi_py="${_gi_py}*.pyo\n"
+        grep -q   "pytest_cache" .gitignore 2>/dev/null || _gi_py="${_gi_py}.pytest_cache/\n"
+        grep -q   "ruff_cache"   .gitignore 2>/dev/null || _gi_py="${_gi_py}.ruff_cache/\n"
+        grep -q   "\.coverage"   .gitignore 2>/dev/null || _gi_py="${_gi_py}.coverage*\n"
+        grep -q   "htmlcov"      .gitignore 2>/dev/null || _gi_py="${_gi_py}htmlcov/\n"
+        grep -q   "^dist/"       .gitignore 2>/dev/null || _gi_py="${_gi_py}dist/\n"
+        grep -q   "egg-info"     .gitignore 2>/dev/null || _gi_py="${_gi_py}*.egg-info\n"
+        if [ -n "$_gi_py" ]; then
+            printf "\n# Python\n%b" "$_gi_py" >> .gitignore
+            echo -e "  $CHECK Updated .gitignore (Python bytecode excludes)"
+        fi
+    else
+        cat > .gitignore << 'GITIGNORE'
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+dist/
+*.egg-info
+GITIGNORE
+        echo -e "  $CHECK Created .gitignore (Python bytecode excludes)"
+    fi
+
+    echo ""
+    echo "  Minimal install complete. You have:"
+    echo "    - Safety hooks (block_dangerous, secrets_scanner, git_guardian)"
+    echo "    - Company hooks (daemon, workers, scheduler)"
+    echo ""
+    echo "  To complete setup, also run:"
+    echo "    gatesmith-install --mode existing"
+    exit 0
+fi
+
+# =============================================================================
+# MODE: VERIFY (read-only — checks an existing install, never re-installs)
+# =============================================================================
+
+if [ "$INSTALL_MODE" = "verify" ]; then
+    section "Verifying Gatesmith Installation"
+
+    VERIFY_ERRORS=0
+
+    # Daemon present
+    if [ -f ".claude/hooks/company/forge_daemon.py" ]; then
+        echo -e "  $CHECK Daemon present (.claude/hooks/company/forge_daemon.py)"
+    else
+        echo -e "  $FAIL Daemon missing (.claude/hooks/company/forge_daemon.py)"
+        VERIFY_ERRORS=$((VERIFY_ERRORS + 1))
+    fi
+
+    # Hooks settings valid JSON
+    if [ -f ".claude/settings.json" ] && python3 -m json.tool ".claude/settings.json" >/dev/null 2>&1; then
+        echo -e "  $CHECK Hooks settings valid (.claude/settings.json)"
+    else
+        echo -e "  $FAIL .claude/settings.json missing or invalid"
+        VERIFY_ERRORS=$((VERIFY_ERRORS + 1))
+    fi
+
+    # Config present + valid JSON (root canonical, else .claude fallback)
+    CFG="gatesmith.json"
+    [ -f "$CFG" ] || CFG=".claude/gatesmith.json"
+    if [ -f "$CFG" ] && python3 -m json.tool "$CFG" >/dev/null 2>&1; then
+        echo -e "  $CHECK gatesmith.json valid ($CFG)"
+        if python3 -c "import json,sys; sys.exit(0 if 'workflowExecution' in json.load(open(sys.argv[1])).get('autonomy',{}) else 1)" "$CFG" 2>/dev/null; then
+            echo -e "  $CHECK Workflow-execution engine configured"
+        else
+            echo -e "  $WARN Workflow-execution engine not configured (older config) — re-run --mode existing to refresh"
+        fi
+    else
+        echo -e "  $FAIL gatesmith.json missing or invalid"
+        VERIFY_ERRORS=$((VERIFY_ERRORS + 1))
+    fi
+
+    # Bin scripts
+    for _b in gatesmith-queue gatesmith-status; do
+        if [ -f "bin/$_b" ]; then
+            echo -e "  $CHECK bin/$_b present"
+        else
+            echo -e "  $WARN bin/$_b missing"
+        fi
+    done
+
+    # Company (optional — not part of a base install)
+    if [ -f ".company/org.json" ]; then
+        echo -e "  $CHECK Company initialized (.company/org.json)"
+    else
+        echo -e "  $INFO No company yet — run /company-init or /company-bootstrap"
+    fi
+
+    echo ""
+    if [ "$VERIFY_ERRORS" -eq 0 ]; then
+        echo -e "  $CHECK Verification passed — Gatesmith looks correctly installed."
+        exit 0
+    else
+        echo -e "  $FAIL Verification found $VERIFY_ERRORS issue(s). Re-run: gatesmith-install --mode existing"
+        exit 1
+    fi
+fi
+
+# =============================================================================
+# PYTHON DEPENDENCIES
+# =============================================================================
+
+section "Installing Python Dependencies"
+
+if [ -f "pyproject.toml" ]; then
+    echo -e "  $INFO Running uv sync..."
+    uv sync 2>&1 | sed 's/^/    /' | head -10
+    echo -e "  $CHECK Dependencies installed"
+else
+    echo -e "  $WARN No pyproject.toml found - creating minimal version"
+    cat > pyproject.toml << 'PYPROJECT'
+[project]
+name = "forge-company"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+    "bandit>=1.7",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+PYPROJECT
+    uv sync 2>&1 | sed 's/^/    /' | head -10
+    echo -e "  $CHECK Created pyproject.toml and installed dependencies"
+fi
+
+# =============================================================================
+# GITHUB REPOSITORY SETUP
+# =============================================================================
+
+section "GitHub Repository Setup"
+
+CURRENT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
+
+if [ -n "$GITHUB_REPO" ]; then
+    if [ -n "$CURRENT_REMOTE" ] && [ "$CURRENT_REMOTE" != "$GITHUB_REPO" ]; then
+        echo -e "  $INFO Updating remote origin to: $GITHUB_REPO"
+        git remote set-url origin "$GITHUB_REPO"
+    elif [ -z "$CURRENT_REMOTE" ]; then
+        echo -e "  $INFO Adding remote origin: $GITHUB_REPO"
+        git remote add origin "$GITHUB_REPO"
+    fi
+    echo -e "  $CHECK Remote configured: $GITHUB_REPO"
+    CURRENT_REMOTE="$GITHUB_REPO"
+elif [ -n "$CURRENT_REMOTE" ]; then
+    echo -e "  $CHECK Remote exists: $CURRENT_REMOTE"
+else
+    echo -e "  $WARN No remote configured"
+    echo -e "  $INFO Run: git remote add origin https://github.com/YOUR_ORG/YOUR_REPO.git"
+fi
+
+# Show GitHub settings
+if [ -n "$CURRENT_REMOTE" ]; then
+    REPO_PATH=$(echo "$CURRENT_REMOTE" | sed -E 's|.*github.com[:/]([^/]+/[^/.]+).*|\1|')
+    echo ""
+    echo -e "  ${CYAN}Required GitHub Settings:${NC}"
+    echo "  https://github.com/${REPO_PATH}/settings"
+    echo ""
+    echo "  1. Branch Protection (Settings > Branches > main):"
+    echo "     [x] Require pull request before merging"
+    echo "     [x] Require status checks: Lint, Test, Security, Hooks Validate"
+    echo "     [x] Allow auto-merge"
+    echo ""
+    echo "  2. Actions Permissions (Settings > Actions > General):"
+    echo "     [x] Read and write permissions"
+    echo "     [x] Allow GitHub Actions to create and approve PRs"
+fi
+
+# =============================================================================
+# GITHUB ACTIONS WORKFLOW
+# =============================================================================
+
+section "GitHub Actions Workflow"
+
+WORKFLOW_FILE=".github/workflows/ci.yml"
+if [ -f "$WORKFLOW_FILE" ]; then
+    echo -e "  $CHECK CI workflow exists: $WORKFLOW_FILE"
+else
+    echo -e "  $INFO Creating CI workflow..."
+    mkdir -p .github/workflows
+    cat > "$WORKFLOW_FILE" << 'WORKFLOW'
+name: Gatesmith CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - name: Run tests
+        run: |
+          if [ -d "tests" ]; then
+            uv run pytest tests/ -v --tb=short --cov=.claude/hooks --cov-fail-under=35
+          fi
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - run: uv run bandit -r .claude/hooks/ -ll -ii
+
+  hooks-validate:
+    name: Hooks Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python syntax
+        run: |
+          for f in .claude/hooks/*.py .claude/hooks/company/*.py; do
+            [ -f "$f" ] && python -m py_compile "$f"
+          done
+
+  # Every push to a daemon PR needs a deliverable verdict of its own: disarm
+  # native auto-merge and hold the head (verdict-pending) until the daemon's
+  # judge passes it. No `needs`, so it lands before any check goes green.
+  verdict-hold:
+    name: Verdict Hold
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      # Label create/add: listed under Pull requests (write) or Issues (write).
+      pull-requests: write
+    steps:
+      - name: Hold daemon PR head for a verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job has no checkout: without GH_REPO, gh pr/label commands
+          # fail with "not a git repository" (GITHUB_REPOSITORY is not read).
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+          AUTHOR_ASSOC: ${{ github.event.pull_request.author_association }}
+        run: |
+          set -u
+          TRUSTED=false
+          case "$PR_BRANCH" in
+            daemon/*|forge/*)
+              case "$AUTHOR_ASSOC" in
+                OWNER|MEMBER|COLLABORATOR) TRUSTED=true ;;
+              esac
+              ;;
+          esac
+          if [ "$TRUSTED" != "true" ]; then
+            echo "Not a trusted daemon PR - no verdict hold"
+            exit 0
+          fi
+          gh pr merge "$PR_NUMBER" --disable-auto || true
+          gh label create verdict-pending --color c5def5 \
+            --description "Daemon PR held until the deliverable judge passes its current head commit" \
+            --force || true
+          if gh pr edit "$PR_NUMBER" --add-label verdict-pending; then
+            echo "verdict-pending applied; native auto-merge disarmed"
+          else
+            echo "::error::Could not apply verdict-pending - failing so Auto-Merge never arms"
+            exit 1
+          fi
+
+  # Arms native auto-merge ONLY for a trusted daemon PR that carries no hold
+  # label, when the BASE branch's gatesmith.json allows merging to main.
+  # (Until 2026-09-26 this job armed every PR, any author, with no checks.)
+  auto-merge:
+    name: Auto-Merge
+    needs: [lint, test, security, hooks-validate, verdict-hold]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Arm auto-merge for an unheld daemon PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job either: gh needs GH_REPO to find the repo.
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+          AUTHOR_ASSOC: ${{ github.event.pull_request.author_association }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          TRUSTED=false
+          case "$PR_BRANCH" in
+            daemon/*|forge/*)
+              case "$AUTHOR_ASSOC" in
+                OWNER|MEMBER|COLLABORATOR) TRUSTED=true ;;
+              esac
+              ;;
+          esac
+          if [ "$TRUSTED" != "true" ]; then
+            echo "Not a trusted daemon PR - leaving it for a human merge"
+            exit 0
+          fi
+          # Policy from the BASE ref, never the PR's own copy. Fail closed.
+          CFG=$(gh api "repos/$REPO/contents/gatesmith.json?ref=$BASE_REF" \
+            -H "Accept: application/vnd.github.raw" 2>/dev/null || echo "")
+          ENABLED=$(printf '%s' "$CFG" | jq -r '.autonomy.autoMerge.enabled // false' 2>/dev/null || echo false)
+          ALLOW_MAIN=$(printf '%s' "$CFG" | jq -r '.autonomy.autoMerge.allowMergeToMain // false' 2>/dev/null || echo false)
+          # Native --auto skips review unless branch protection demands one:
+          # never arm it while requireApproval is anything but a literal false.
+          REQ_APPROVAL=$(printf '%s' "$CFG" | jq -r '.autonomy.autoMerge.requireApproval // false' 2>/dev/null || echo true)
+          if [ "$ENABLED" != "true" ] || [ "$ALLOW_MAIN" != "true" ] || [ "$REQ_APPROVAL" != "false" ]; then
+            echo "autoMerge.enabled/allowMergeToMain not both true, or requireApproval set, on $BASE_REF - leaving PR for a human merge"
+            # Disarm a native auto-merge armed before the policy changed.
+            gh pr merge "$PR_NUMBER" --disable-auto || true
+            exit 0
+          fi
+          LABELS=$(gh pr view "$PR_NUMBER" --json labels -q '.labels[].name' 2>/dev/null || echo "__GH_ERROR__")
+          if [ "$LABELS" = "__GH_ERROR__" ] || echo "$LABELS" | grep -qxE "needs-manual-review|awaiting-operator-review|verdict-pending|challenger:pending|challenger:incomplete|challenger:needs-human"; then
+            echo "Hold label present (or labels unreadable) - disarming, not arming"
+            gh pr merge "$PR_NUMBER" --disable-auto || true
+            exit 0
+          fi
+          IS_DRAFT=$(gh pr view "$PR_NUMBER" --json isDraft -q '.isDraft' 2>/dev/null || echo true)
+          if [ "$IS_DRAFT" != "false" ]; then
+            echo "Draft (or unreadable) - not arming"
+            exit 0
+          fi
+          gh pr merge "$PR_NUMBER" --auto --squash || echo "::notice::could not arm auto-merge (non-fatal)"
+WORKFLOW
+    echo -e "  $CHECK CI workflow created"
+fi
+
+# =============================================================================
+# COMPANY STRUCTURE
+# =============================================================================
+
+section "Company Structure"
+
+# Create directories
+for dir in ".company/state" ".company/agents" ".company/logs" ".company/results" ".company/employees" ".planning"; do
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+        echo -e "  $CHECK Created: $dir"
+    else
+        echo -e "  $CHECK Exists: $dir"
+    fi
+done
+
+# Create org.json if missing
+if [ ! -f ".company/org.json" ]; then
+    echo -e "  $INFO Creating org.json..."
+    cat > ".company/org.json" << 'ORGJSON'
+{
+  "company": {
+    "name": "AI Development Company",
+    "description": "Autonomous AI-powered software development organization",
+    "created": "2026-01-01T00:00:00Z"
+  },
+  "employees": [
+    {
+      "id": "forge-architect",
+      "name": "Gatesmith Architect",
+      "type": "persistent",
+      "department": "engineering",
+      "status": "available",
+      "capabilities": ["architecture", "design-decisions", "roadmap", "patterns"]
+    },
+    {
+      "id": "senior-python-developer",
+      "name": "Senior Python Developer",
+      "type": "persistent",
+      "department": "engineering",
+      "status": "available",
+      "capabilities": ["python", "testing", "debugging", "optimization"]
+    },
+    {
+      "id": "technical-writer",
+      "name": "Technical Writer",
+      "type": "persistent",
+      "department": "operations",
+      "status": "available",
+      "capabilities": ["documentation", "markdown", "tutorials"]
+    }
+  ]
+}
+ORGJSON
+    echo -e "  $CHECK Created org.json with 3 employees"
+else
+    EMPLOYEE_COUNT=$(python3 -c "import json; print(len(json.load(open('.company/org.json')).get('employees',[])))" 2>/dev/null || echo "?")
+    echo -e "  $CHECK org.json exists ($EMPLOYEE_COUNT employees)"
+fi
+
+# Create work queue if missing
+if [ ! -f ".company/state/work_queue.json" ]; then
+    echo '{"pending":[],"in_progress":[],"completed":[],"failed":[],"blocked":[],"archived":[]}' > ".company/state/work_queue.json"
+    echo -e "  $CHECK Created work_queue.json"
+else
+    echo -e "  $CHECK work_queue.json exists"
+fi
+
+# Create roadmap state if missing
+if [ ! -f ".company/state/roadmap_state.json" ]; then
+    echo '{"tasks_scheduled":[],"tasks_in_progress":[],"tasks_completed":[],"current_phase":"P1","current_wave":1}' > ".company/state/roadmap_state.json"
+    echo -e "  $CHECK Created roadmap_state.json"
+else
+    echo -e "  $CHECK roadmap_state.json exists"
+fi
+
+# =============================================================================
+# FORGE CONFIGURATION
+# =============================================================================
+
+section "Gatesmith Configuration"
+
+if [ ! -f "gatesmith.json" ]; then
+    echo -e "  $INFO Creating gatesmith.json..."
+    # Single source of truth: copy the canonical fresh-install config shipped in
+    # the repo (.claude/gatesmith.json) rather than hand-maintaining a template
+    # here (which drifts out of sync with the real schema). Matches install.sh.
+    # Only fall back to a minimal inline config if the source can't be fetched.
+    _CFG_TMP=$(mktemp -d)
+    if git clone --depth 1 "$FORGE_SOURCE" "$_CFG_TMP" 2>/dev/null && [ -f "$_CFG_TMP/.claude/gatesmith.json" ]; then
+        cp "$_CFG_TMP/.claude/gatesmith.json" gatesmith.json
+        echo -e "  $CHECK Created gatesmith.json (canonical)"
+    else
+        # Offline fallback: minimal but CURRENT + SAFE. The schema-validated
+        # workflow-execution engine is ON (matches the shipped config); autoMerge
+        # is written explicitly OFF — the daemon treats an absent autoMerge
+        # block as "merge allowed" (pre-2026-09-26 behaviour), so omitting it is
+        # not safe. The daemon ships disabled (enabled:false), matching
+        # canonical — user runs /daemon start.
+        cat > "gatesmith.json" << 'FORGECONFIG'
+{
+  "modelProfile": "pro",
+  "daemon": {
+    "enabled": false,
+    "maxWorkers": 3,
+    "pollIntervalSeconds": 30
+  },
+  "autonomy": {
+    "workflowExecution": {
+      "enabled": true,
+      "confidenceThreshold": 0.7,
+      "onJudgeError": "fallback",
+      "model": null,
+      "timeoutSeconds": 240,
+      "maxDiffChars": 60000
+    },
+    "autoPR": {
+      "enabled": true,
+      "requireTestsPass": true,
+      "requireLintPass": true,
+      "requireSecretsClean": true
+    },
+    "autoMerge": {
+      "enabled": false,
+      "allowMergeToMain": false,
+      "requireApproval": true
+    }
+  }
+}
+FORGECONFIG
+        echo -e "  $CHECK Created gatesmith.json (minimal offline fallback)"
+    fi
+    rm -rf "$_CFG_TMP"
+else
+    echo -e "  $CHECK gatesmith.json exists"
+fi
+
+# State exactly what the daemon will do with its own PRs, read from the config
+# it will actually load — same key defaults as forge_daemon.DaemonConfig
+# (absent enabled/allowMergeToMain = true, absent requireApproval = false;
+# a non-boolean value fails closed).
+if [ -f "gatesmith.json" ]; then
+    _MERGE_POLICY=$(python3 - "gatesmith.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    am = (json.load(open(sys.argv[1])).get("autonomy") or {}).get("autoMerge")
+except Exception:
+    print("UNREADABLE")
+    sys.exit(0)
+am = am if isinstance(am, dict) else {}
+def flag(key, default, permissive):
+    if key not in am:
+        return default
+    v = am[key]
+    return v if isinstance(v, bool) else (not permissive)
+enabled = flag("enabled", True, True)
+allow = flag("allowMergeToMain", True, True)
+approval = flag("requireApproval", False, False)
+if not enabled:
+    print("OFF")
+elif not allow:
+    print("NO_MAIN")
+elif approval:
+    print("APPROVAL")
+else:
+    print("AUTO")
+PY
+)
+    case "$_MERGE_POLICY" in
+        OFF) echo -e "  $INFO Merge policy: autoMerge.enabled=false - the daemon opens PRs and never merges them; you review and merge" ;;
+        NO_MAIN) echo -e "  $INFO Merge policy: allowMergeToMain=false - the daemon opens PRs and never merges them; you review and merge" ;;
+        APPROVAL) echo -e "  $INFO Merge policy: requireApproval=true - the daemon merges a PR only after a DIFFERENT GitHub account (a collaborator, not the account the daemon runs as) approves its current head and every merge gate passes. With a single GitHub account the daemon never merges" ;;
+        AUTO) echo -e "  $WARN Merge policy: the daemon MERGES its own PRs to main once CI, the deliverable judge and path rules pass (autonomy.autoMerge)" ;;
+        *) echo -e "  $WARN Merge policy: could not read autonomy.autoMerge from gatesmith.json - check it before starting the daemon" ;;
+    esac
+fi
+
+# =============================================================================
+# ROADMAP
+# =============================================================================
+
+section "Roadmap Setup"
+
+if [ ! -f ".planning/ROADMAP.md" ]; then
+    echo -e "  $INFO Creating initial ROADMAP.md..."
+    cat > ".planning/ROADMAP.md" << 'ROADMAP'
+# Roadmap
+
+## Current: P1 — Initial Setup
+
+**Goal:** Verify the autonomous development pipeline works end-to-end.
+**Status:** IN PROGRESS
+**Owner:** Engineering
+
+---
+
+### Wave 1: Foundation (no dependencies)
+
+<task id="1.1" status="pending" depends="">
+  <name>Verify CI pipeline</name>
+  <description>Create a small test PR to verify GitHub Actions workflow runs correctly.</description>
+  <acceptance>PR created, all checks pass, auto-merge succeeds</acceptance>
+</task>
+
+<task id="1.2" status="pending" depends="">
+  <name>Add basic test coverage</name>
+  <description>Add tests to reach minimum 35% coverage threshold.</description>
+  <acceptance>pytest passes with coverage >= 35%</acceptance>
+</task>
+
+<task id="1.3" status="pending" depends="">
+  <name>Document setup process</name>
+  <description>Create README with getting started instructions.</description>
+  <acceptance>README.md has installation and usage sections</acceptance>
+</task>
+
+### Wave 2: Automation (depends on Wave 1)
+
+<task id="1.4" status="pending" depends="1.1,1.2">
+  <name>Verify daemon task execution</name>
+  <description>Confirm daemon picks up tasks, executes them, and creates PRs.</description>
+  <acceptance>Task flows through complete pipeline: queue → execution → PR → merge</acceptance>
+</task>
+ROADMAP
+    echo -e "  $CHECK Created ROADMAP.md with 4 tasks"
+else
+    TASK_COUNT=$(grep -c 'status="pending"' .planning/ROADMAP.md 2>/dev/null || echo "0")
+    echo -e "  $CHECK ROADMAP.md exists ($TASK_COUNT pending tasks)"
+fi
+
+# =============================================================================
+# GITIGNORE
+# =============================================================================
+
+section "Git Configuration"
+
+# Add Gatesmith-specific ignores
+_gi_updated=false
+if [ -f ".gitignore" ]; then
+    if ! grep -q ".company/state/" .gitignore 2>/dev/null; then
+        echo -e "  $INFO Adding Gatesmith entries to .gitignore..."
+        cat >> .gitignore << 'GITIGNORE'
+
+# Gatesmith Framework
+.company/state/
+.company/results/
+.company/logs/
+.company/runtime/
+.claude/worktrees/
+GITIGNORE
+        _gi_updated=true
+    fi
+    # Always add missing Python and coverage artifact excludes
+    _gi_py=""
+    grep -qF "__pycache__/" .gitignore 2>/dev/null || _gi_py="${_gi_py}__pycache__/\n"
+    grep -q   "\.pyc"        .gitignore 2>/dev/null || _gi_py="${_gi_py}*.pyc\n"
+    grep -q   "\.pyo"        .gitignore 2>/dev/null || _gi_py="${_gi_py}*.pyo\n"
+    grep -q   "pytest_cache" .gitignore 2>/dev/null || _gi_py="${_gi_py}.pytest_cache/\n"
+    grep -q   "ruff_cache"   .gitignore 2>/dev/null || _gi_py="${_gi_py}.ruff_cache/\n"
+    grep -q   "\.coverage"   .gitignore 2>/dev/null || _gi_py="${_gi_py}.coverage*\n"
+    grep -q   "htmlcov"      .gitignore 2>/dev/null || _gi_py="${_gi_py}htmlcov/\n"
+    grep -q   "^dist/"       .gitignore 2>/dev/null || _gi_py="${_gi_py}dist/\n"
+    grep -q   "egg-info"     .gitignore 2>/dev/null || _gi_py="${_gi_py}*.egg-info\n"
+    if [ -n "$_gi_py" ]; then
+        printf "\n# Python\n%b" "$_gi_py" >> .gitignore
+        _gi_updated=true
+    fi
+    if [ "$_gi_updated" = "true" ]; then
+        echo -e "  $CHECK Updated .gitignore"
+    else
+        echo -e "  $CHECK .gitignore already has Gatesmith and Python entries"
+    fi
+else
+    cat > .gitignore << 'GITIGNORE'
+# Gatesmith Framework
+.company/state/
+.company/results/
+.company/logs/
+.company/runtime/
+.claude/worktrees/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+dist/
+*.egg-info
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+GITIGNORE
+    echo -e "  $CHECK Created .gitignore"
+fi
+
+# =============================================================================
+# FINAL STATUS
+# =============================================================================
+
+section "Installation Summary"
+
+if [ $ERRORS -eq 0 ]; then
+    echo -e "  ${GREEN}Installation complete!${NC}"
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────┐"
+    echo "  │  NEXT STEPS                                             │"
+    echo "  ├─────────────────────────────────────────────────────────┤"
+    echo "  │                                                         │"
+    echo "  │  1. Configure GitHub settings (see above)               │"
+    echo "  │                                                         │"
+    echo "  │  2. Push to GitHub:                                     │"
+    echo "  │     git add -A                                          │"
+    echo "  │     git commit -m 'Add Gatesmith autonomous framework'      │"
+    echo "  │     git push -u origin main                             │"
+    echo "  │                                                         │"
+    echo "  │  3. Start the daemon:                                   │"
+    echo "  │     claude              # Enter Claude Code             │"
+    echo "  │     /daemon start       # Start autonomous operation    │"
+    echo "  │                                                         │"
+    echo "  │  4. Monitor progress:                                   │"
+    echo "  │     ./bin/gatesmith-queue watch                             │"
+    echo "  │                                                         │"
+    echo "  └─────────────────────────────────────────────────────────┘"
+    echo ""
+    echo "  Documentation:"
+    echo "    docs/QUICKSTART.md        — 5-minute guide"
+    echo "    docs/AUTONOMOUS-SETUP.md  — Full reference"
+else
+    echo -e "  ${RED}Installation incomplete: $ERRORS error(s)${NC}"
+    echo ""
+    echo "  Please resolve the errors above and run again."
+    exit 1
+fi
+
+echo ""
+echo "========================================"
+echo "  FORGE INSTALLATION COMPLETE"
+echo "========================================"
+echo ""
