@@ -850,9 +850,11 @@ def render_dashboard(
         lines.append(f"  {'When':<12}   {'ID':<7} {'By':<14} {'PR':<10} Task")
         lines.append(f"  {'----':<12}   {'--':<7} {'--':<14} {'--':<10} ----")
         for t in recent:
+            # A task leaves the PR lane for completed only when its PR merged,
+            # and it keeps result "pr_open" from when it entered that lane.
             marker = (
                 "\033[32m+\033[0m"
-                if t.get("result") == "completed"
+                if t.get("result") in ("completed", "pr_open")
                 else "\033[31mx\033[0m"
             )
             completed_by = emp_short(t.get("assigned_to") or t.get("claimed_by", ""), t)
